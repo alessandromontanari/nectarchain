@@ -73,15 +73,12 @@ class CameraMonitoring(DQMSummary):
         con = sqlite3.connect(SqlFileName)
         cursor = con.cursor()
         try:
-            # print(cursor.fetchall())
+            # to print the name of all the tables
             # cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             cursor.execute("SELECT * FROM monitoring_drawer_temperatures;")
-            # TempData = cursor.execute(
-            #     """SELECT * FROM monitoring_drawer_temperatures"""
-            # )
-            # print(TempData.description)
             self.DrawerTemp = cursor.fetchall()
             cursor.close()
+            con.close()
         except sqlite3.Error as err:
             log.error(
                 f"Drawer temperature could not be retrieved. Received error "
