@@ -90,7 +90,7 @@ def main():
         "--r0",
         action="store_true",
         default=False,
-        help="Disable all R0->R1 " "corrections",
+        help="Disable all R0->R1 corrections",
     )
     parser.add_argument(
         "--max-events",
