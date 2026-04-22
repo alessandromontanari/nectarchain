@@ -9,11 +9,13 @@ dependencies:
   - jinja2
   - jupyterlab
   - jupytext
+  - numpy<2.4
   - pre-commit
   - pytest-runner
   - pip
   - pandas
   - scipy
+  - setuptools<81
   - sphinx
   - sphinx-automodapi
   - pydata-sphinx-theme

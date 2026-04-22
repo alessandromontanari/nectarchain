@@ -1,15 +1,22 @@
 # don't forget to set environment variable NECTARCAMDATA
 
 import argparse
+import logging
 import os
 import pickle
 import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+from ctapipe.core import run_tool
 
+from nectarchain.makers.calibration import PedestalNectarCAMCalibrationTool
 from nectarchain.trr_test_suite.tools_components import TimingResolutionTestTool
 from nectarchain.trr_test_suite.utils import pe2photons, photons2pe
+
+logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+log.handlers = logging.getLogger("__main__").handlers
 
 
 def get_args():
@@ -59,6 +66,15 @@ def get_args():
         default="./",
     )
     parser.add_argument(
+        "-t",
+        "--mean_charge_threshold",
+        type=float,
+        help="Threshold below which to select good events,"
+        "in units of mean camera charge",
+        required=False,
+        default=10,
+    )
+    parser.add_argument(
         "--temp_output", help="Temporary output directory for GUI", default=None
     )
     return parser
@@ -84,8 +100,8 @@ def main():
     output_dir = os.path.abspath(args.output)
     temp_output = os.path.abspath(args.temp_output) if args.temp_output else None
 
-    print(f"Output directory: {output_dir}")  # Debug print
-    print(f"Temporary output file: {temp_output}")  # Debug print
+    log.debug(f"Output directory: {output_dir}")
+    log.debug(f"Temporary output file: {temp_output}")
 
     sys.argv = sys.argv[:1]
 
@@ -96,15 +112,37 @@ def main():
     mean_charge_pe = []
 
     for run in runlist:
-        print("PROCESSING RUN {}".format(run))
+        log.info("PROCESSING RUN {}".format(run))
+        # Old runs do not have interleaved pedestals
+        pedestal_tool = PedestalNectarCAMCalibrationTool(
+            progress_bar=True,
+            run_number=run,
+            max_events=12000,
+            events_per_slice=5000,
+            log_level=20,
+            overwrite=True,
+            filter_method=None,
+            method="FullWaveformSum",  # charges over entire window
+        )
+        try:
+            run_tool(pedestal_tool)
+        except Exception as e:
+            log.warning(e)
         tool = TimingResolutionTestTool(
             progress_bar=True,
             run_number=run,
             max_events=nevents,
-            events_per_slice=999,
+            events_per_slice=9999,
             log_level=20,
-            window_width=16,
+            method="LocalPeakWindowSum",
+            extractor_kwargs={
+                "window_width": 6,
+                "window_shift": 3,
+            },  # This width and shift works best for ToM calculation
             overwrite=True,
+            pedestal_file=pedestal_tool.output_path,
+            use_default_pedestal=True,  # only done if pedestal_file cannot be loaded
+            mean_charge_threshold=args.mean_charge_threshold,
         )
         tool.initialize()
         tool.setup()
@@ -116,13 +154,12 @@ def main():
         rms_no_fit_err.append(output[1])
         mean_charge_pe.append(output[2])
 
-    print(rms_no_fit)
-    photons_spline = np.array(mean_charge_pe) * 100 / 25
+    log.debug(rms_no_fit)
     rms_no_fit_err = np.array(rms_no_fit_err)
-    print(rms_no_fit_err)
+    log.debug(rms_no_fit_err)
     rms_no_fit_err[rms_no_fit_err == 0] = 1e-5  # almost zero
     # rms_no_fit_err[rms_no_fit_err==np.nan]=1e-5
-    print(rms_no_fit_err)
+    log.debug(rms_no_fit_err)
 
     # mean_rms_mu = np.mean(rms_mu,axis=1)
     # mean_rms_no_fit = np.mean(rms_no_fit,axis=1)
@@ -130,7 +167,7 @@ def main():
     # weights_mu_pix = 1/(np.array(rms_mu_err)+1e-5)**2
     weights_no_fit_pix = 1 / (rms_no_fit_err) ** 2
     weights_no_fit_pix[weights_no_fit_pix > 1e5] = 1e5
-    print(weights_no_fit_pix)
+    log.debug(weights_no_fit_pix)
 
     # rms_mu_weighted=[]
     # rms_mu_weighted_err=[]
@@ -147,19 +184,19 @@ def main():
         )
         rms_no_fit_weighted_err.append(np.sqrt(1 / np.nansum(weights_no_fit_pix[run])))
 
-    print(rms_no_fit_weighted)
-    print(rms_no_fit_weighted_err)
+    log.debug(rms_no_fit_weighted)
+    log.debug(rms_no_fit_weighted_err)
 
     # FIGURE
     fig, ax = plt.subplots(figsize=(10, 7), constrained_layout=True)
 
     plt.errorbar(
-        x=photons_spline[:],
+        x=mean_charge_pe[:],
         y=np.sqrt(np.array(rms_no_fit_weighted[:]) ** 2),
         yerr=rms_no_fit_weighted_err,
         ls="",
         marker="o",
-        label=r"$\mathtt{scipy.signal.find\_peaks}$",
+        label=r"$\mathtt{ctapipe.image.extractor}$",
     )
     # plt.errorbar(x=photons_spline[:],
     #              y=np.sqrt(np.array(rms_mu_weighted[:])**2),
@@ -176,7 +213,7 @@ def main():
         label="Quantification rms noise",
     )
 
-    plt.axvspan(20, 1000, alpha=0.1, color="C4")
+    plt.axvspan(photons2pe(20), photons2pe(1000), alpha=0.1, color="C4")
 
     ax.text(
         51.5,
@@ -206,12 +243,12 @@ def main():
     )
 
     plt.legend(frameon=True, prop={"size": 18}, loc="upper right", handlelength=1.2)
-    plt.xlabel("Illumination charge [photons]")
+    plt.xlabel("Illumination charge [p.e.]")
     plt.ylabel("Mean rms per pixel [ns]")
     plt.xscale("log")
     plt.ylim((0, 2.7))
     secax = ax.secondary_xaxis("top", functions=(pe2photons, photons2pe))
-    secax.set_xlabel("Illumination charge [p.e.]", labelpad=7)
+    secax.set_xlabel("Illumination charge [photons]", labelpad=7)
     plt.savefig(os.path.join(output_dir, "pix_tim_uncertainty.png"))
 
     if temp_output:

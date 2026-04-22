@@ -1,11 +1,15 @@
 import collections
+import json
+import os
 import re
+from datetime import datetime, timezone
 
 import numpy as np
+from astropy.coordinates import SkyCoord
 
 # bokeh imports
 from bokeh.layouts import gridplot
-from bokeh.models import TabPanel
+from bokeh.models import ColorBar, TabPanel
 from bokeh.plotting import figure
 
 # ctapipe imports
@@ -15,6 +19,12 @@ from ctapipe.instrument import CameraGeometry
 # ctapipe imports
 from ctapipe.visualization.bokeh import CameraDisplay
 from ctapipe_io_nectarcam import constants
+
+from nectarchain.dqm.bokeh_app.logging_config import setup_logger
+
+base_dir = os.path.abspath(os.path.dirname(__file__))
+labels_path = os.path.join(base_dir, "data", "labels.json")
+
 
 NOTINDISPLAY = [
     "TRIGGER-.*",
@@ -27,6 +37,69 @@ TEST_PATTERN = "(?:% s)" % "|".join(NOTINDISPLAY)
 
 geom = CameraGeometry.from_name("NectarCam-003")
 geom = geom.transform_to(EngineeringCameraFrame())
+
+logger = setup_logger()
+
+
+def get_run_ids_for_camera(src, camera_code):
+    """Get run ids for a given camera from database keys
+
+    Parameters
+    ----------
+    src : DQMDB
+        Object-oriented database defined in nectarchain.dqm.db_utils
+        from ZODB and ZEO ClientStorage
+    camera_code : str
+        Code of the camera to filter the run ids for
+
+    Returns
+    -------
+    list
+        List containing the run ids for the given camera
+    """
+
+    all_database_keys = list(src.keys())
+    run_ids_for_camera = []
+    for key in all_database_keys:
+        if f"NectarCAM{camera_code}" in key:
+            run_ids_for_camera.append(key)
+
+    logger.info(
+        f"Successfully extracted run ids for camera {camera_code} from database keys"
+    )
+
+    run_ids_for_camera = sorted(run_ids_for_camera, reverse=True)
+    return run_ids_for_camera
+
+
+def get_available_cameras_from_db_keys(src):
+    """Get available cameras from database keys
+
+    Parameters
+    ----------
+    src : DQMDB
+        Object-oriented database defined in nectarchain.dqm.db_utils
+        from ZODB and ZEO ClientStorage
+
+    Returns
+    -------
+    set
+        Set containing the names of available cameras
+    """
+
+    all_database_keys = list(src.keys())
+    available_cameras = set()
+    for key in all_database_keys:
+        if not re.match(TEST_PATTERN, key):
+            camera_name = key.split("NectarCAM")[1].split("_")[0]
+            available_cameras.add(camera_name)
+
+    logger.info(
+        "Successfully extracted available cameras"
+        + f"from database keys: {available_cameras}"
+    )
+
+    return available_cameras
 
 
 # TODO: check actual output type and content
@@ -50,10 +123,53 @@ def get_rundata(src, runid):
     """
 
     run_data = src[runid]
+
+    logger.info(f"Successfully extracted data for run {runid}")
+
     return run_data
 
 
-# TODO: check actual timelines shape
+def get_run_times(source):
+    """Extract important time stamps for the provided run data
+
+    Parameters
+    ----------
+    source : dict
+        Dictionary returned by `get_rundata`
+
+    Returns
+    -------
+    run_start_time_dt : datetime.datetime
+        Time of the start of the run in %Y-%m-%d %H:%M:%S format
+    first_event_time_dt : datetime.datetime
+        Time when the first event was recorded in %Y-%m-%d %H:%M:%S format
+    last_event_time_dt : datetime.datetime
+        Time when the last event was recorded in %Y-%m-%d %H:%M:%S format
+    """
+
+    run_start_time = int(source["START-TIMES"]["Run start time"].flatten()[0])
+    run_start_time_dt = datetime.fromtimestamp(
+        run_start_time, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    first_event_time = int(source["START-TIMES"]["First event"].flatten()[0])
+    first_event_time_dt = datetime.fromtimestamp(
+        first_event_time, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    last_event_time = int(source["START-TIMES"]["Last event"].flatten()[0])
+    last_event_time_dt = datetime.fromtimestamp(
+        last_event_time, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    logger.info(
+        f"Successfully extracted run times: "
+        f"run start time {run_start_time_dt}, "
+        f"first event time {first_event_time_dt}, "
+        f"last event time {last_event_time_dt}"
+    )
+
+    return run_start_time_dt, first_event_time_dt, last_event_time_dt
+
+
 def make_timelines(source, runid=None):
     """Make timeline plots for pixel quantities evolving with time
 
@@ -72,19 +188,52 @@ def make_timelines(source, runid=None):
         Nested dictionary containing line plots for the timelines
     """
 
+    with open(labels_path, "r", encoding="utf-8") as file:
+        y_axis_labels = json.load(file)["y_axis_labels_timelines"]
+
     timelines = collections.defaultdict(dict)
     for parentkey in source.keys():
         # Prepare timeline line plots only for pixel quantities evolving with time
         if re.match("(?:.*PIXTIMELINE-.*)", parentkey):
             for childkey in source[parentkey].keys():
-                print(f"Run id {runid} Preparing plot for {parentkey}, {childkey}")
+                logger.info(
+                    f"Run id {runid}, preparing plot for {parentkey}, {childkey}"
+                )
                 timelines[parentkey][childkey] = figure(title=childkey)
                 evts = np.arange(len(source[parentkey][childkey]))
+                timelines[parentkey][childkey] = figure(
+                    title=childkey,
+                    x_range=(0, np.max(evts) + 50),
+                    y_range=(0, 1),
+                    # A fraction is plotted:
+                    # y-range values are between 0 and 1 because
+                )
                 timelines[parentkey][childkey].line(
                     x=evts,
                     y=source[parentkey][childkey],
                     line_width=3,
                 )
+    for parentkey in timelines.keys():
+        for childkey in timelines[parentkey].keys():
+            timelines[parentkey][childkey].xaxis.axis_label = "Event number"
+            try:
+                timelines[parentkey][childkey].yaxis.axis_label = y_axis_labels[
+                    parentkey
+                ]
+            except ValueError:
+                timelines[parentkey][childkey].yaxis.axis_label = ""
+            except KeyError:
+                timelines[parentkey][childkey].yaxis.axis_label = ""
+
+            timelines[parentkey][childkey].xaxis.axis_label_text_font_size = "12pt"
+            timelines[parentkey][childkey].yaxis.axis_label_text_font_size = "12pt"
+            timelines[parentkey][childkey].xaxis.major_label_text_font_size = "10pt"
+            timelines[parentkey][childkey].yaxis.major_label_text_font_size = "10pt"
+            timelines[parentkey][childkey].xaxis.axis_label_text_font_style = "normal"
+            timelines[parentkey][childkey].yaxis.axis_label_text_font_style = "normal"
+
+    logger.info(f"Successfully created timeline plots for run {runid}")
+
     return dict(timelines)
 
 
@@ -148,17 +297,22 @@ def make_camera_displays(source, runid):
     Returns
     -------
     dict
-        Nested dictionary containing camera display plots
+        Nested dictionary containing display plots created by `make_camera_display`
     """
 
     displays = collections.defaultdict(dict)
     for parentkey in source.keys():
         if not re.match(TEST_PATTERN, parentkey):
             for childkey in source[parentkey].keys():
-                print(f"Run id {runid} Preparing plot for {parentkey}, {childkey}")
+                logger.info(
+                    f"Run id {runid}, preparing plot for {parentkey}, {childkey}"
+                )
                 displays[parentkey][childkey] = make_camera_display(
                     source, parent_key=parentkey, child_key=childkey
                 )
+
+    logger.info(f"Successfully created camera display plots for run {runid}")
+
     return dict(displays)
 
 
@@ -170,7 +324,8 @@ def update_camera_displays(data, displays, runid=None):
     data : dict
         Dictionary returned by `get_rundata`
     displays : dict
-        Nested dictionary containing display plots created by `make_camera_displays`
+        Nested dictionary containing display plots
+        created by `make_camera_displays`
     runid : str, optional
         Identifier for dictionary extracted from the database,
         containing the NectarCAM run number. Example: 'NectarCAM_Run6310'.
@@ -231,17 +386,158 @@ def make_camera_display(source, parent_key, child_key):
         and displayed with the geometry from ctapipe.instrument.CameraGeometry
     """
 
-    image = source[parent_key][child_key]
-    image = np.nan_to_num(image, nan=0.0)
+    image = np.nan_to_num(source[parent_key][child_key], nan=0.0)
+
+    if "BADPIX" in parent_key:
+        image = set_bad_pixels_cap_value(image)
+    else:
+        mask_high_gain, mask_low_gain = get_bad_pixels_position(
+            source=source, image_shape=image.shape
+        )
+        min_colorbar = np.min(
+            image[~mask_low_gain if "LOW-GAIN" in parent_key else ~mask_high_gain]
+        )
+        max_colorbar = np.max(
+            image[~mask_low_gain if "LOW-GAIN" in parent_key else ~mask_high_gain]
+        )
+        image[mask_low_gain if "LOW-GAIN" in parent_key else mask_high_gain] = 0.0
+
     display = CameraDisplay(geometry=geom)
     try:
         display.image = image
-    except ValueError:
+    except ValueError as e:
         image = np.zeros(shape=display.image.shape)
         display.image = image
-    except KeyError:
+        logger.error(
+            f"Exception '{e}', filled camera plot"
+            + f" {parent_key}, {child_key} with zeros"
+        )
+    except KeyError as e:
         image = np.zeros(shape=constants.N_PIXELS)
         display.image = image
-    display.add_colorbar()
+        logger.error(
+            f"Exception '{e}', filled camera plot"
+            + f" {parent_key}, {child_key} with zeros"
+        )
+
+    fig = display.figure
+    pix_x, pix_y = geom.pix_x, geom.pix_y
+    cam_coords = SkyCoord(x=pix_x, y=pix_y, frame=geom.frame)
+    # add axis labels
+    fig.xaxis.axis_label = f"x / {cam_coords.x.unit}"
+    fig.yaxis.axis_label = f"y / {cam_coords.y.unit}"
+    fig.xaxis.axis_label_text_font_size = "12pt"
+    fig.xaxis.axis_label_text_font_style = "normal"
+    fig.yaxis.axis_label_text_font_size = "12pt"
+    fig.yaxis.axis_label_text_font_style = "normal"
+
+    if "BADPIX" not in parent_key:
+        display._color_mapper.low = min_colorbar
+        display._color_mapper.high = max_colorbar
+        # for pixels that are outside the colorbar range, like bad pixels,
+        # set displayed color to white
+        if not all(~mask_high_gain):
+            display._color_mapper.low_color = "white"
+
+    # add colorbar
+    color_bar = ColorBar(
+        color_mapper=display._color_mapper,
+        padding=5,
+    )
+    fig.add_layout(color_bar, "right")
+    color_bar.title_text_font_size = "14pt"
+    color_bar.title_text_font_style = "normal"
+
+    with open(labels_path, "r", encoding="utf-8") as file:
+        colorbar_labels = json.load(file)["colorbar_labels_camera_display"]
+
+    try:
+        color_bar.title = colorbar_labels[parent_key]
+    except ValueError:
+        color_bar.title = ""
+    except KeyError:
+        color_bar.title = ""
+
     display.figure.title = child_key
+
     return display
+
+
+def set_bad_pixels_cap_value(image):
+    """Set cap value for the bad pixels to 1,
+       to follow the colorbar definition
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        2D array extracted from the database,
+        containing bad pixel values for the whole camera
+
+    Returns
+    -------
+    numpy.ndarray
+        The 2D image with the bad pixel values capped to 1
+    """
+
+    image[image > 1] = 1.0
+
+    return image
+
+
+def get_bad_pixels_position(source, image_shape):
+    """Get the positions of the bad pixels
+       in the camera as boolean masks
+
+    Parameters
+    ----------
+    source : dict
+        Dictionary returned by `get_rundata`
+    image_shape : tuple
+        Shape of the display image
+        for the quantity called in `make_camera_display`
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask containing the positions of
+        bad pixels in the camera for the High gain channel
+    numpy.ndarray
+        Boolean mask containing the positions of
+        bad pixels in the camera for the Low gain channel
+    """
+
+    try:
+        if "CAMERA-BADPIX-PED-PHY-OVEREVENTS-HIGH-GAIN" in source.keys():
+            image_badpix_high_gain = source[
+                "CAMERA-BADPIX-PED-PHY-OVEREVENTS-HIGH-GAIN"
+            ]["CAMERA-BadPix-PED-PHY-OverEVENTS-HIGH-GAIN"]
+            image_badpix_low_gain = source[
+                "CAMERA-BADPIX-PED-PHY-OVEREVENTS-HIGH-GAIN"
+            ]["CAMERA-BadPix-PED-PHY-OverEVENTS-HIGH-GAIN"]
+        elif "CAMERA-BADPIX-PHY-OVEREVENTS-HIGH-GAIN" in source.keys():
+            image_badpix_high_gain = source["CAMERA-BADPIX-PHY-OVEREVENTS-HIGH-GAIN"][
+                "CAMERA-BadPix-PHY-OverEVENTS-HIGH-GAIN"
+            ]
+            image_badpix_low_gain = source["CAMERA-BADPIX-PHY-OVEREVENTS-HIGH-GAIN"][
+                "CAMERA-BadPix-PHY-OverEVENTS-HIGH-GAIN"
+            ]
+
+        mask_bad_pixels_high_gain = image_badpix_high_gain >= 1.0
+        # FIXME: bad pixels for High and Low gain may be the same
+        # (although it may depend on the definition of bad pixel),
+        # the mask defined below may be obsolete
+        mask_bad_pixels_low_gain = image_badpix_low_gain >= 1.0
+    except KeyError as e:
+        mask_bad_pixels_high_gain = np.zeros(shape=constants.N_PIXELS, dtype=bool)
+        mask_bad_pixels_low_gain = mask_bad_pixels_high_gain
+        logger.error(f"Exception '{e}', bad pixels flag not found in the database")
+
+    if image_shape != mask_bad_pixels_high_gain.shape:
+        mask_bad_pixels_high_gain = np.zeros(shape=image_shape, dtype=bool)
+        mask_bad_pixels_low_gain = mask_bad_pixels_high_gain
+        logger.error(
+            "Some modules not available for the run,"
+            + " need to reset the shape of the bad pixels masks"
+        )
+
+    return mask_bad_pixels_high_gain, mask_bad_pixels_low_gain
