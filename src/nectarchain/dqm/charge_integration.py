@@ -94,7 +94,7 @@ class ChargeIntegrationHighLowGain(DQMSummary):
             self.integrator = GlobalPeakWindowSum(subarray, config=config)
 
     def process_event(self, evt, noped):
-        self.pixels = evt.nectarcam.tel[self.tel_id].svc.pixel_ids
+        self.pixels = np.asarray(evt.nectarcam.tel[self.tel_id].svc.pixel_ids)
         self.pixelBADplot = evt.mon.tel[
             self.tel_id
         ].pixel_status.hardware_failing_pixels
@@ -114,35 +114,32 @@ class ChargeIntegrationHighLowGain(DQMSummary):
         if self.r0:
             waveform = evt.r0.tel[self.tel_id].waveform[self.k]
         else:
-            # This should accommodate cases were the shape of waveforms is 2D
-            # (1855,60), or 3D (2, 1855, 60) for 2-gain channels or
-            # (1, 1855, 60) for single-gain channel
             waveform = evt.r1.tel[self.tel_id].waveform
+            # If waveform is 3D (n_gains, n_pixels, n_samples), select gain channel
+            if waveform.ndim == 3:
+                waveform = waveform[self.k]
+
         waveform = waveform[self.pixels]
 
         ped = np.mean(waveform[:, 20])
         if noped:
             waveform = waveform - ped
 
-        try:
-            output = CtapipeExtractor.get_image_peak_time(
-                self.integrator(
-                    waveforms=waveform,
-                    tel_id=self.tel_id,
-                    selected_gain_channel=channel,
-                    broken_pixels=self.pixelBAD,
-                )
+        # Ensure waveform is 2D (n_pixels, n_samples) for the integrator
+        # Handle edge cases: scalar (0D) -> (1,1), 1D array -> (1, n_samples)
+        if waveform.ndim == 0:
+            waveform = waveform.reshape(1, 1)
+        elif waveform.ndim == 1:
+            waveform = waveform.reshape(1, -1)
+
+        output = CtapipeExtractor.get_image_peak_time(
+            self.integrator(
+                waveforms=waveform[np.newaxis, :],
+                tel_id=self.tel_id,
+                selected_gain_channel=channel,
+                broken_pixels=self.pixelBAD,
             )
-        except IndexError:
-            waveform = waveform[np.newaxis, :]
-            output = CtapipeExtractor.get_image_peak_time(
-                self.integrator(
-                    waveforms=waveform,
-                    tel_id=self.tel_id,
-                    selected_gain_channel=channel,
-                    broken_pixels=self.pixelBAD,
-                )
-            )
+        )
 
         image = output[0]
         peakpos = output[1]
