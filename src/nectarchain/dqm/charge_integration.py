@@ -89,7 +89,7 @@ class ChargeIntegrationHighLowGain(DQMSummary):
             )
         else:
             config = Config(
-                {"GlobalPeakWindowSum": {"window_shift": 4, "window_width": 12}}
+                {"GlobalPeakWindowSum": {"window_shift": 4, "window_width": 16}}
             )
             self.integrator = GlobalPeakWindowSum(subarray, config=config)
 
@@ -321,17 +321,18 @@ class ChargeIntegrationHighLowGain(DQMSummary):
         # Charge integration SPECTRUM
         if self.counter_evt > 0:
             fig, _ = plt.subplots()
-            for i in range(len(self.pixels)):
-                plt.hist(
-                    self.image_all[:, i],
-                    100,
-                    fill=False,
-                    density=True,
-                    stacked=True,
-                    linewidth=1,
-                    log=True,
-                    alpha=0.01,
-                )
+            # Vectorized: plot all pixel charges at once instead of looping
+            all_charges = self.image_all.flatten()
+            plt.hist(
+                all_charges,
+                100,
+                fill=False,
+                density=True,
+                linewidth=1,
+                log=True,
+                alpha=0.5,
+                label="All pixels",
+            )
             plt.hist(
                 np.mean(self.image_all, axis=1),
                 100,
@@ -359,17 +360,18 @@ class ChargeIntegrationHighLowGain(DQMSummary):
 
         if self.counter_ped > 0:
             fig, _ = plt.subplots()
-            for i in range(len(self.pixels)):
-                plt.hist(
-                    self.image_ped[:, i],
-                    100,
-                    fill=False,
-                    density=True,
-                    stacked=True,
-                    linewidth=1,
-                    log=True,
-                    alpha=0.01,
-                )
+            # Vectorized: plot all pixel charges at once instead of looping
+            all_charges_ped = self.image_ped.flatten()
+            plt.hist(
+                all_charges_ped,
+                100,
+                fill=False,
+                density=True,
+                linewidth=1,
+                log=True,
+                alpha=0.5,
+                label="All pixels",
+            )
             plt.hist(
                 np.mean(self.image_ped, axis=1),
                 100,
@@ -392,6 +394,7 @@ class ChargeIntegrationHighLowGain(DQMSummary):
                 "CHARGE-INTEGRATION-SPECTRUM-PED-%s-GAIN" % self.gain_c
             ] = FullPath
 
-            plt.close()
+            plt.close(fig)
+            del fig
 
         return self.ChargeInt_Figures_Dict, self.ChargeInt_Figures_Names_Dict
