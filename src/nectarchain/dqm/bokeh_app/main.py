@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 from app_hooks import (
     get_available_cameras_from_db_keys,
@@ -19,6 +20,9 @@ from bokeh.layouts import column, row
 from bokeh.models import Div, Select, TabPanel, Tabs
 from bokeh.plotting import curdoc
 
+# codecarbon
+from codecarbon import EmissionsTracker
+
 # ctapipe imports
 from ctapipe.coordinates import EngineeringCameraFrame
 from ctapipe.instrument import CameraGeometry
@@ -29,10 +33,26 @@ from extract_data import categorize_source_data
 from nectarchain.dqm.bokeh_app.logging_config import setup_logger
 from nectarchain.dqm.db_utils import DQMDB
 
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
 geom = CameraGeometry.from_name("NectarCam-003")
 geom = geom.transform_to(EngineeringCameraFrame())
 
 logger = setup_logger()
+
+
+# Helper to track emissions for a block of code
+def track_co2_emissions():
+    tracker = EmissionsTracker(
+        project_name="nectarchain_dqm_bokeh",
+        measure_power_secs=1,  # Sample power every second
+        output_dir=str(LOG_DIR),
+        save_to_file=True,
+    )
+    # tracker.start()
+
+    return tracker
 
 
 def get_layout_per_camera(source, runids, camera_code):
@@ -72,11 +92,17 @@ def get_layout_per_camera(source, runids, camera_code):
 
         runid = new
 
+        tracker = track_co2_emissions()  # Init tracker
+
+        tracker.start_task("update request - get data")
         requested_at_time = time.time()
         logger.info(f"Requested to display information for run: {runid}")
+
         source = get_rundata(db, runid)
         categorized = categorize_source_data(source)
+        tracker.stop_task()
 
+        tracker.start_task("update request - running the makers")
         tab_camera_displays = update_camera_displays(
             categorized["camera_displays"], runid
         )
@@ -111,6 +137,7 @@ def get_layout_per_camera(source, runids, camera_code):
             </div>
             """
         )
+        emissions = tracker.stop_task()
 
         # Combine panels into tabs
         tabs = Tabs(
@@ -127,6 +154,23 @@ def get_layout_per_camera(source, runids, camera_code):
         page_layout.children[0].children[1] = run_times_string
 
         request_processed = time.time() - requested_at_time
+        emissions_tracker_string = Div(
+            text=f"""
+            <div style="
+                background-color: #f0f8ff;
+                border-radius: 10px;
+                padding: 10px;
+                width: fit-content;
+                font-size: 14px;
+            ">
+                <p>Current app compilation: {1000:.4f} gCO₂eq</p>
+            </div>
+            """
+        )
+        # <p>Current app compilation: {emissions * 1000:.4f} gCO₂eq</p>
+        logger.info(emissions)
+
+        page_layout.children[0].children[2] = emissions_tracker_string
         logger.info(
             f"Updated layouts and TabPanel objects for tabs in {request_processed:.2f}s"
         )
@@ -152,9 +196,15 @@ def get_layout_per_camera(source, runids, camera_code):
 
     logger.info(f"Getting data for run {run_select.value}")
 
+    tracker = track_co2_emissions()  # Init tracker
+    tracker.start_task("first app call - get data")
     requested_at_time = time.time()
+
     source = get_rundata(db, run_select.value)
     categorized = categorize_source_data(source)
+    tracker.stop_task()
+
+    tracker.start_task("first app call - running the makers")
     displays = make_camera_displays(categorized["camera_displays"], runid)
     timelines = make_timelines(categorized["timelines"], runid)
     waveforms = make_waveforms(categorized["waveforms"], runid)
@@ -187,8 +237,25 @@ def get_layout_per_camera(source, runids, camera_code):
         </div>
         """
     )
+    emissions = tracker.stop_task()
 
-    controls = row(run_select, run_times_string)
+    emissions_tracker_string = Div(
+        text=f"""
+        <div style="
+            background-color: #f0f8ff;
+            border-radius: 10px;
+            padding: 10px;
+            width: fit-content;
+            font-size: 14px;
+        ">
+            <p>Current app compilation: {1000:.4f} gCO₂eq</p>
+        </div>
+        """
+    )
+    logger.info(emissions)
+    # <p>Current app compilation: {emissions * 1000:.4f} gCO₂eq</p>
+
+    controls = row(run_select, run_times_string, emissions_tracker_string)
 
     # # TEST:
     # attr = 'value'

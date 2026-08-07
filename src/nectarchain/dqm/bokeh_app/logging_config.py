@@ -3,7 +3,11 @@ import os
 from logging.handlers import RotatingFileHandler
 
 
-def setup_logger(logger_name="nectarchain.dqm.bokeh_app", log_level=logging.INFO):
+def setup_logger(
+    logger_name="nectarchain.dqm.bokeh_app",
+    log_file_name="app.log",
+    log_level=logging.INFO,
+):
     """Set up a rotating file logger for the Bokeh app
 
     Parameters
@@ -25,7 +29,7 @@ def setup_logger(logger_name="nectarchain.dqm.bokeh_app", log_level=logging.INFO
         "NECTARCHAIN_LOG", os.path.join(os.path.dirname(__file__), "logs")
     )
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "app.log")
+    log_file = os.path.join(log_dir, log_file_name)
 
     logger = logging.getLogger(logger_name)
     logger.setLevel(log_level)
