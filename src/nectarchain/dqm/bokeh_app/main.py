@@ -33,7 +33,7 @@ from extract_data import categorize_source_data
 from nectarchain.dqm.bokeh_app.logging_config import setup_logger
 from nectarchain.dqm.db_utils import DQMDB
 
-LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR = Path(__file__).parent / "logs/emissions"
 LOG_DIR.mkdir(exist_ok=True)
 
 geom = CameraGeometry.from_name("NectarCam-003")
@@ -46,11 +46,11 @@ logger = setup_logger()
 def track_co2_emissions():
     tracker = EmissionsTracker(
         project_name="nectarchain_dqm_bokeh",
-        measure_power_secs=1,  # Sample power every second
+        measure_power_secs=1,
+        # Sample power every second
         output_dir=str(LOG_DIR),
         save_to_file=True,
     )
-    # tracker.start()
 
     return tracker
 
@@ -94,7 +94,7 @@ def get_layout_per_camera(source, runids, camera_code):
 
         tracker = track_co2_emissions()  # Init tracker
 
-        tracker.start_task("update request - get data")
+        tracker.start_task(f"update request, camera {camera_code} - get data")
         requested_at_time = time.time()
         logger.info(f"Requested to display information for run: {runid}")
 
@@ -102,7 +102,7 @@ def get_layout_per_camera(source, runids, camera_code):
         categorized = categorize_source_data(source)
         tracker.stop_task()
 
-        tracker.start_task("update request - running the makers")
+        tracker.start_task(f"update request, camera {camera_code} - running the makers")
         tab_camera_displays = update_camera_displays(
             categorized["camera_displays"], runid
         )
@@ -138,6 +138,7 @@ def get_layout_per_camera(source, runids, camera_code):
             """
         )
         emissions = tracker.stop_task()
+        tracker.stop()
 
         # Combine panels into tabs
         tabs = Tabs(
@@ -163,12 +164,10 @@ def get_layout_per_camera(source, runids, camera_code):
                 width: fit-content;
                 font-size: 14px;
             ">
-                <p>Current app compilation: {1000:.4f} gCO₂eq</p>
+                <p>Current app compilation: {emissions.emissions * 1000:.4f} gCO₂eq</p>
             </div>
             """
         )
-        # <p>Current app compilation: {emissions * 1000:.4f} gCO₂eq</p>
-        logger.info(emissions)
 
         page_layout.children[0].children[2] = emissions_tracker_string
         logger.info(
@@ -197,14 +196,14 @@ def get_layout_per_camera(source, runids, camera_code):
     logger.info(f"Getting data for run {run_select.value}")
 
     tracker = track_co2_emissions()  # Init tracker
-    tracker.start_task("first app call - get data")
+    tracker.start_task(f"first app call, camera {camera_code} - get data")
     requested_at_time = time.time()
 
     source = get_rundata(db, run_select.value)
     categorized = categorize_source_data(source)
     tracker.stop_task()
 
-    tracker.start_task("first app call - running the makers")
+    tracker.start_task(f"first app call, camera {camera_code} - running the makers")
     displays = make_camera_displays(categorized["camera_displays"], runid)
     timelines = make_timelines(categorized["timelines"], runid)
     waveforms = make_waveforms(categorized["waveforms"], runid)
@@ -238,6 +237,7 @@ def get_layout_per_camera(source, runids, camera_code):
         """
     )
     emissions = tracker.stop_task()
+    tracker.stop()
 
     emissions_tracker_string = Div(
         text=f"""
@@ -248,12 +248,10 @@ def get_layout_per_camera(source, runids, camera_code):
             width: fit-content;
             font-size: 14px;
         ">
-            <p>Current app compilation: {1000:.4f} gCO₂eq</p>
+            <p>Current app compilation: {emissions.emissions * 1000:.4f} gCO₂eq</p>
         </div>
         """
     )
-    logger.info(emissions)
-    # <p>Current app compilation: {emissions * 1000:.4f} gCO₂eq</p>
 
     controls = row(run_select, run_times_string, emissions_tracker_string)
 
