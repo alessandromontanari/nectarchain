@@ -198,7 +198,7 @@ class PingPongMonitoring(DQMSummary):
 
         # Handle edge case when there are no changes
         max_change = int(np.max(self.change)) if self.nchanges > 0 else 1
-        bounds = np.linspace(0, max_change, min(int(self.nchanges) + 1, max_change + 1))
+        bounds = np.linspace(0, max_change, min(int(self.nchanges) + 1, 20))
 
         disp.set_limits_minmax(zmin=0, zmax=max_change)
         disp.axes.text(2.0, -0.3, "Number of changes", fontsize=12, rotation=90)
