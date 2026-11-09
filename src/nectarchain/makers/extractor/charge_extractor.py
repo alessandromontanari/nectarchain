@@ -56,14 +56,14 @@ class gradient_extractor(ImageExtractor):
                 shape[0] * shape[1], 1
             )
 
-            _ = waveforms - (ped_mean) @ (
+            waveforms = waveforms - (ped_mean) @ (
                 np.ones(1, shape[2])
             )  # waveforms without pedestal
         else:
             log.info("do not substract pedestal")
-            _ = waveforms
+            waveforms = waveforms
 
-        waveforms.reshape(shape[0], shape[1], shape[2])
+        waveforms = waveforms.reshape(shape[0], shape[1], shape[2])
 
         (
             peak_time,
