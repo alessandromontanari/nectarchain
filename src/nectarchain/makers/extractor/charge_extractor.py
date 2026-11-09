@@ -61,7 +61,6 @@ class gradient_extractor(ImageExtractor):
             )  # waveforms without pedestal
         else:
             log.info("do not substract pedestal")
-            waveforms = waveforms
 
         waveforms = waveforms.reshape(shape[0], shape[1], shape[2])
 
