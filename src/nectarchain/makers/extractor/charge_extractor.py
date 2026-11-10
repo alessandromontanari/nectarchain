@@ -2,7 +2,6 @@ import logging
 
 import numpy as np
 from ctapipe.image import ImageExtractor
-from numba import guvectorize
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.signal import find_peaks
 
@@ -27,7 +26,7 @@ class gradient_extractor(ImageExtractor):
     fixed_window = np.uint8(16)
     height_peak = np.uint8(10)
 
-    def __call__(self, waveforms, telid, selected_gain_channel, substract_ped=False):
+    def __call__(self, waveforms, telid, selected_gain_channel, subtract_ped=False):
         """Extract charge and peak time from waveforms.
 
         Parameters
@@ -46,43 +45,49 @@ class gradient_extractor(ImageExtractor):
         tuple
             Peak time and charge integral arrays.
         """
+        # TODO: use telid and selected_gain_channel
         shape = waveforms.shape
-        waveforms = waveforms.reshape(shape[0] * shape[1], shape[2])
+        n_events = shape[0]
+        n_pixels = shape[1]
 
-        if substract_ped:
+        # Initialize output arrays
+        peak_time = np.zeros((n_events, n_pixels), dtype=np.uint16)
+        charge_integral = np.zeros((n_events, n_pixels), dtype=np.float32)
+
+        if subtract_ped:
             log.info("substracting pedestal")
-            # calculate pedestal
-            ped_mean = np.mean(waveforms[:, :16], axis=1).reshape(
-                shape[0] * shape[1], 1
-            )
-
-            waveforms = waveforms - (ped_mean) @ (
-                np.ones(1, shape[2])
-            )  # waveforms without pedestal
+            # calculate and subtract pedestals
+            ped_mean = np.mean(waveforms[:, :16], axis=2)
+            waveforms = waveforms - ped_mean[:, :, np.newaxis]
         else:
             log.info("do not substract pedestal")
 
-        waveforms = waveforms.reshape(shape[0], shape[1], shape[2])
-
-        (
-            peak_time,
-            charge_integral,
-            charge_sum,
-            charge_integral_fixed_window,
-            charge_sum_fixed_window,
-        ) = extract_charge(waveforms, self.height_peak, self.fixed_window)
+        for i in range(n_events):
+            for j in range(n_pixels):
+                result = extract_charge(
+                    waveforms[i, j], self.height_peak, self.fixed_window
+                )
+                peak_time[i, j] = result[0]
+                charge_integral[i, j] = result[1]
 
         return peak_time, charge_integral
 
 
-@guvectorize(
-    [
-        "(np.uint16[:], np.uint8, np.uint8, np.uint16[:])",
-    ],
-    "(n,p,s),(),()->(n,p)",
-    nopython=True,
-    cache=True,
-)
+def _compute_gradients(yi_left, yi_right):
+    """Numba-optimized gradient computation."""
+    yi_grad_left = np.gradient(yi_left[::-1], 0.9)
+    change_grad_pos_left = (np.where(yi_grad_left[:-1] * yi_grad_left[1:] < 0)[0] + 1)[
+        0
+    ]
+
+    yi_grad_right = np.gradient(yi_right, 0.5)
+    change_grad_pos_right = (
+        np.where(yi_grad_right[:-1] * yi_grad_right[1:] < 0)[0] + 1
+    )[0]
+
+    return change_grad_pos_left, change_grad_pos_right
+
+
 def extract_charge(y, height_peak, fixed_window):
     """Extract charge features from a waveform using spline interpolation and gradient
     analysis.
@@ -102,6 +107,12 @@ def extract_charge(y, height_peak, fixed_window):
         Adaptive window size, charge integral, charge sum,
         charge integral (fixed window), charge sum (fixed window).
     """
+    adaptive_window = 0
+    charge_integral = 0.0
+    charge_sum = 0.0
+    charge_integral_fixed_window = 0.0
+    charge_sum_fixed_window = 0.0
+
     x = np.linspace(0, len(y), len(y))
     xi = np.linspace(0, len(y), 251)
     ius = InterpolatedUnivariateSpline(x, y)
@@ -130,17 +141,13 @@ def extract_charge(y, height_peak, fixed_window):
             # calcualte grandients starting from the max peak and going to the left to
             # find the left margin of the window
             yi_left = yi[:maxposition]
-            yi_grad_left = np.gradient(yi_left[::-1], 0.9)
-            change_grad_pos_left = (
-                np.where(yi_grad_left[:-1] * yi_grad_left[1:] < 0)[0] + 1
-            )[0]
             # calcualte grandients starting from the max peak and going to the right to
             # find the right margin of the window
             yi_right = yi[maxposition:]
-            yi_grad_right = np.gradient(yi_right, 0.5)
-            change_grad_pos_right = (
-                np.where(yi_grad_right[:-1] * yi_grad_right[1:] < 0)[0] + 1
-            )[0]
+            change_grad_pos_left, change_grad_pos_right = _compute_gradients(
+                yi_left, yi_right
+            )
+
             charge_integral = ius.integral(
                 xi[peaks[max_peak_index] - (change_grad_pos_left)],
                 xi[peaks[max_peak_index] + change_grad_pos_right],
@@ -152,20 +159,22 @@ def extract_charge(y, height_peak, fixed_window):
                 change_grad_pos_left + change_grad_pos_right
             )  # simple sum integration
             adaptive_window = change_grad_pos_right + change_grad_pos_left
-            window_right = (fixed_window - 6) / 2
-            window_left = (fixed_window - 6) / 2 + 6
+            window_right = np.ceil((fixed_window - 6) / 2).astype(int)
+            window_left = np.floor((fixed_window - 6) / (2 + 6)).astype(int)
             charge_integral_fixed_window = ius.integral(
-                xi[peaks[max_peak_index] - (window_left)],
+                xi[peaks[max_peak_index] - window_left],
                 xi[peaks[max_peak_index] + window_right],
             )
             charge_sum_fixed_window = yi[
-                (peaks[max_peak_index] - (window_left)) : peaks[max_peak_index]
+                peaks[max_peak_index]
+                - window_left : peaks[max_peak_index]
                 + window_right
             ].sum() / (
                 fixed_window
             )  # simple sum integration
     else:
         log.info("No peak found, maybe it is a pedestal or noisy run!")
+
     return (
         adaptive_window,
         charge_integral,
