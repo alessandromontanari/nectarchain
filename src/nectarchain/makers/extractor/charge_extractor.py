@@ -1,6 +1,7 @@
 import logging
 
 import numpy as np
+from ctapipe.containers import DL1CameraContainer
 from ctapipe.image import ImageExtractor
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.signal import find_peaks
@@ -26,14 +27,14 @@ class gradient_extractor(ImageExtractor):
     fixed_window = np.uint8(16)
     height_peak = np.uint8(10)
 
-    def __call__(self, waveforms, telid, selected_gain_channel, subtract_ped=False):
+    def __call__(self, waveforms, tel_id, selected_gain_channel, subtract_ped=False):
         """Extract charge and peak time from waveforms.
 
         Parameters
         ----------
         waveforms : ndarray
             Raw waveform data.
-        telid : int
+        tel_id : int
             Telescope ID.
         selected_gain_channel : int
             Selected gain channel index.
@@ -45,7 +46,7 @@ class gradient_extractor(ImageExtractor):
         tuple
             Peak time and charge integral arrays.
         """
-        # TODO: use telid and selected_gain_channel
+        # TODO: use tel_id and selected_gain_channel
         shape = waveforms.shape
         n_events = shape[0]
         n_pixels = shape[1]
@@ -70,11 +71,12 @@ class gradient_extractor(ImageExtractor):
                 peak_time[i, j] = result[0]
                 charge_integral[i, j] = result[1]
 
-        return peak_time, charge_integral
+        return DL1CameraContainer(
+            image=charge_integral, peak_time=peak_time, is_valid=True
+        )
 
 
 def _compute_gradients(yi_left, yi_right):
-    """Numba-optimized gradient computation."""
     yi_grad_left = np.gradient(yi_left[::-1], 0.9)
     change_grad_pos_left = (np.where(yi_grad_left[:-1] * yi_grad_left[1:] < 0)[0] + 1)[
         0

@@ -69,9 +69,8 @@ class TestGradientExtractor:
 
     def test_single_pulse_extraction(self, extractor, simple_pulse_waveform):
         """Test extraction on a simple pulse waveform."""
-        peak_time, charge = extractor(
-            simple_pulse_waveform, telid=1, selected_gain_channel=0
-        )
+        container = extractor(simple_pulse_waveform, tel_id=1, selected_gain_channel=0)
+        charge, peak_time = container.image, container.peak_time
         # Check that we got valid outputs
         assert peak_time is not None
         assert charge is not None
@@ -84,9 +83,8 @@ class TestGradientExtractor:
 
     def test_double_pulse_extraction(self, extractor, double_pulse_waveform):
         """Test extraction on a double pulse waveform."""
-        peak_time, charge = extractor(
-            double_pulse_waveform, telid=1, selected_gain_channel=0
-        )
+        container = extractor(double_pulse_waveform, tel_id=1, selected_gain_channel=0)
+        charge, peak_time = container.image, container.peak_time
         # Check that we got valid outputs
         assert peak_time is not None
         assert charge is not None
@@ -99,9 +97,8 @@ class TestGradientExtractor:
 
     def test_zero_pulse_extraction(self, extractor, zero_pulse_waveform):
         """Test extraction on a zero pulse waveform."""
-        peak_time, charge = extractor(
-            zero_pulse_waveform, telid=1, selected_gain_channel=0
-        )
+        container = extractor(zero_pulse_waveform, tel_id=1, selected_gain_channel=0)
+        charge, peak_time = container.image, container.peak_time
         # Check that we got valid outputs
         assert peak_time is not None
         assert charge is not None
@@ -114,9 +111,10 @@ class TestGradientExtractor:
 
     def test_single_pulse_extraction_subped(self, extractor, simple_pulse_waveform):
         """Test extraction on a simple pulse waveform."""
-        peak_time, charge = extractor(
-            simple_pulse_waveform, telid=1, selected_gain_channel=0, subtract_ped=True
+        container = extractor(
+            simple_pulse_waveform, tel_id=1, selected_gain_channel=0, subtract_ped=True
         )
+        charge, peak_time = container.image, container.peak_time
         # Check that we got valid outputs
         assert peak_time is not None
         assert charge is not None
